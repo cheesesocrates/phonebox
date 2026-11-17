@@ -14,7 +14,7 @@
 .w[data-widget-shadow="true"] { box-shadow: 0 5px 16px rgba(0,0,0,.28) !important; }
 .w:is([data-widget-surface="cards"],[data-widget-surface="seamless"]) { background: var(--card); }
 .w[data-widget-surface="flat"] {
-  background: #15191f;
+  background: #0f0f0f;
   background: color-mix(in srgb, var(--bg) 94%, var(--text));
   background-image: none !important;
   -webkit-backdrop-filter: none !important;

@@ -2,6 +2,9 @@
 // they import what they need from here, so this module must not run code that needs them while it loads
 // (the start section at the end runs after every module has loaded).
 import { W } from './registry.js';
+import { enterPage, leavePage, live, resetPage, rise } from './motion.js';
+import { setAsciiLevel } from './ascii.js';
+import { closeCustomize, initCustomize, openCustomize } from './custom.js';
 import './appearance.js';
 import { cached } from './widgets/helpers.js';
 import './widgets/basic.js';
@@ -65,7 +68,37 @@ export const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} },
 };
 
-export let cfg = PREVIEW ? { ...DEFAULT_CFG, pages: [] } : { ...DEFAULT_CFG, ...store.get('cfg', {}) };
+// The computer's settings as they came (rawCfg), and what the panel runs on (cfg): those settings with this phone's own
+// choices from Customize laid over the display part. The phone's choices stay on the phone (localStorage).
+export const PHONE_KEY = 'pb-phone';
+export function withPhone(c) {
+  const mine = PREVIEW ? null : store.get(PHONE_KEY, null);
+  if (!mine) return c;
+  const display = { ...(c.display || {}), ...(mine.display || {}) };
+  if (mine.appearance) display.appearance = { ...(c.display?.appearance || {}), ...mine.appearance };
+  return { ...c, display };
+}
+let rawCfg = PREVIEW ? { ...DEFAULT_CFG, pages: [] } : { ...DEFAULT_CFG, ...store.get('cfg', {}) };
+export let cfg = withPhone(rawCfg);
+/** The parts of Customize that are plain CSS switches on <html>: motion, card style, corners, ASCII. */
+export function phoneLook() {
+  const mine = (PREVIEW ? null : store.get(PHONE_KEY, null)) || {};
+  const root = document.documentElement;
+  root.dataset.motion = mine.motion === 'off' ? 'off' : 'on';
+  root.dataset.cards = mine.cards || 'default';
+  if (mine.radius != null) {
+    root.style.setProperty('--r', mine.radius + 'px');
+    root.style.setProperty('--r-sm', Math.round(mine.radius * 0.66) + 'px');
+  } else { root.style.removeProperty('--r'); root.style.removeProperty('--r-sm'); }
+  setAsciiLevel(mine.ascii || 'subtle');
+}
+/** Applies a change made in Customize: rebuilds only what depends on it. */
+export function applyPhone() {
+  cfg = withPhone(rawCfg);
+  phoneLook();
+  buildLayout();
+  applyDisplay();
+}
 export let cfgVersion = null;
 export let online = null;
 export let lastTouch = Date.now();
@@ -277,18 +310,28 @@ export function chart(canvas, series, opts = {}) {
   }
 }
 
+const RING_C = 2 * Math.PI * 42;
+const ringOffset = (pct) => (RING_C * (1 - Math.max(0, Math.min(100, pct || 0)) / 100)).toFixed(1);
+function paceTick(elapsed) {
+  if (elapsed == null) return '';
+  const a = elapsed * 2 * Math.PI;
+  const p = (rad) => [50 + Math.cos(a) * rad, 50 + Math.sin(a) * rad].map((v) => v.toFixed(1));
+  const [x1, y1] = p(35), [x2, y2] = p(49);
+  return `<line class="pace" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+}
+
 export function ringSvg(pct, elapsed) {
-  const r = 42, c = 2 * Math.PI * r;
-  const off = c * (1 - Math.max(0, Math.min(100, pct)) / 100);
-  let tick = '';
-  if (elapsed != null) {
-    const a = elapsed * 2 * Math.PI;
-    const p = (rad) => [50 + Math.cos(a) * rad, 50 + Math.sin(a) * rad].map((v) => v.toFixed(1));
-    const [x1, y1] = p(35), [x2, y2] = p(49);
-    tick = `<line class="pace" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
-  }
-  return `<svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="${r}"/>` +
-    `<circle class="fg" cx="50" cy="50" r="${r}" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"/>${tick}</svg>`;
+  return `<svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="42"/>` +
+    `<circle class="fg" cx="50" cy="50" r="42" stroke-dasharray="${RING_C.toFixed(1)}" stroke-dashoffset="${ringOffset(pct)}"/>${paceTick(elapsed)}</svg>`;
+}
+
+/** Puts a ring in a dial, or moves the arc of the one already there so it glides to the new value (CSS transition). */
+export function ringInto(dial, pct, elapsed) {
+  const svg = dial.querySelector(':scope > svg');
+  if (!svg) { dial.insertAdjacentHTML('afterbegin', ringSvg(pct, elapsed)); return; }
+  svg.querySelector('.fg').style.strokeDashoffset = ringOffset(pct);
+  svg.querySelector('.pace')?.remove();
+  if (elapsed != null) svg.insertAdjacentHTML('beforeend', paceTick(elapsed)); // numbers only
 }
 
 // ---------------------------------------------------------------- metrics (stat, gauge, chart widgets)
@@ -437,10 +480,11 @@ export function wxLines() {
   const hi = d.temperature_2m_max ? Math.round(d.temperature_2m_max[0]) : null;
   const lo = d.temperature_2m_min ? Math.round(d.temperature_2m_min[0]) : null;
   return {
+    code: c.weather_code, day: c.is_day,
     icon: wxIcon(c.weather_code, c.is_day),
     temp: Math.round(c.temperature_2m) + '°',
-    desc: `${desc} · ${cfg.weather?.city || ''}`,
-    range: (hi != null ? `↑${hi}° ↓${lo}° · ` : '') + t('wx.feelsLike', { deg: Math.round(c.apparent_temperature) }),
+    desc,
+    range: hi != null ? `↑${hi}°  ↓${lo}°` : '',
   };
 }
 
@@ -527,8 +571,9 @@ export const setMediaState = (m) => {
   media = m ? { ...m, at: performance.now() } : null;
   emit('state');
 };
-// The background glow: the accent colour (Settings › Display), or the album art's colour while music plays.
-export let DEFAULT_AMBIENT = '45, 212, 191';
+// The music colour (the record's label in the media widget): the album art's colour while music plays, otherwise the
+// accent colour (Settings › Display), white unless one was picked.
+export let DEFAULT_AMBIENT = '255, 255, 255';
 export let artTint = true;
 export let currentArtColor = null;
 export const setArtColor = (c) => { currentArtColor = c; setAmbient(c); };
@@ -557,9 +602,13 @@ export const setAmbient = (rgb) => document.documentElement.style.setProperty('-
 
 /** The empty media card. A function, not a constant: its texts are translated when the widget is built. */
 export const mediaHtml = () => `
+  <div class="m-bg" aria-hidden="true"><img alt=""></div>
   <div class="m-top">
-    <div class="art-wrap"><img class="art" alt=""><div class="art-ph">♪</div></div>
-    <div class="m-text"><div class="m-app"><span class="m-source-icon" aria-hidden="true"></span><span class="m-app-name">Media</span></div><div class="m-title">${t('w.nothingPlaying')}</div><div class="m-artist">${t('w.startOnPc')}</div></div>
+    <div class="art-stack">
+      <div class="vinyl" aria-hidden="true"><i></i></div>
+      <div class="art-wrap"><img class="art" alt=""><div class="art-ph">♪</div></div>
+    </div>
+    <div class="m-text"><div class="m-app"><span class="m-eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="m-source-icon" aria-hidden="true"></span><span class="m-app-name">Media</span></div><div class="m-title">${t('w.nothingPlaying')}</div><div class="m-artist">${t('w.startOnPc')}</div></div>
   </div>
   <div class="m-progress"><div class="bar"><div class="fill"></div></div><div class="times"><span class="m-pos">0:00</span><span class="m-dur">0:00</span></div></div>
   <div class="m-controls">
@@ -585,10 +634,7 @@ export const Q_STYLE = { antigravity: { color: '#38bdf8', logo: '✦' }, claude:
 
 export function fmtReset(ts) {
   if (!ts) return '';
-  const d = new Date(ts);
-  const hm = fmtHM(d);
-  const day = d.toDateString() === new Date().toDateString() ? hm : d.toLocaleDateString(LOCALE, { weekday: 'short' }) + ' ' + hm;
-  return `${day} · ${t('time.inDur', { dur: fmtDur(ts - Date.now()) })}`;
+  return t('time.inDur', { dur: fmtDur(ts - Date.now()) }); // the clock time of the reset adds a number, not an answer
 }
 
 /** Compares the share of the quota used with the share of the window elapsed. */
@@ -882,7 +928,9 @@ export function renderApproval() {
   const a = approvals[0];
   const box = $('approval');
   if (!a) { box.hidden = true; approvalShown = null; return; }
+  let fresh = false;
   if (approvalShown !== a.id) {
+    fresh = true;
     approvalShown = a.id;
     lastTouch = Date.now();
     undim();
@@ -902,7 +950,12 @@ export function renderApproval() {
   $('apDesc').textContent = a.description || '';
   $('apDetail').textContent = a.detail || '';
   $('apDetail').hidden = !a.detail;
+  const wasHidden = box.hidden;
   box.hidden = false;
+  if (fresh) {
+    if (wasHidden) rise(box.querySelector('.ap-card'), { y: 28, scale: 0.98, duration: 0.8 });
+    rise([...box.querySelectorAll('.ap-head, .ap-tool, .ap-desc, .ap-detail, .ap-foot')].filter((e) => !e.hidden), { y: 10, stagger: 0.05, delay: wasHidden ? 0.12 : 0 });
+  }
   tickApproval();
 }
 
@@ -1178,12 +1231,15 @@ export function goPage(i, instant = false) {
   i = Math.max(0, Math.min(pages.length - 1, i));
   if (curPage >= 0 && i !== curPage && pagePaused) setPagePaused(false, { feedback: false, resume: false });
   if (!instant) { pager.scrollTo({ left: i * window.innerWidth, behavior: 'smooth' }); return; }
+  const from = curPage;
   // scroll-snap-stop: always would stop a programmatic jump at the next page, so snapping is paused for the jump.
   pager.style.scrollSnapType = 'none';
   pager.scrollLeft = i * window.innerWidth;
   onScroll();
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => (pager.style.scrollSnapType = ''), 120);
+  // a jump (keys, overview, a rule) has no slide to show where the page came from: it comes in from that side
+  if (from >= 0 && from !== curPage) enterPage(pager.children[curPage], Math.sign(curPage - from));
 }
 
 export function gotoPageRef(ref) {
@@ -1280,12 +1336,17 @@ function idleDue() {
   const maxHold = (dsp().holdMaxMin ?? 30) * 60_000;
   const held = ruleHold && curPage === ruleHold.page && (!maxHold || Date.now() - ruleHold.at < maxHold);
   return !held && Date.now() - Math.max(lastTouch, lastNav) > idle * 1000
-    && (curPage !== homeIndex() || !!sheet || !$('overview').hidden);
+    && (curPage !== homeIndex() || !!sheet || !$('overview').hidden || !$('custom').hidden);
 }
 
 function softGo(i) {
   if (i === curPage) return;
   if (Math.abs(i - curPage) === 1) { goPage(i); return; }
+  if (live()) {
+    const old = pager.children[curPage];
+    leavePage(old).then(() => { goPage(i, true); resetPage(old); });
+    return;
+  }
   pager.classList.add('fade');
   const pausedBefore = pagePaused; // the Back key goes home through here while paused, and that must still work
   setTimeout(() => {
@@ -1311,7 +1372,7 @@ function perform(req) {
     if (h && curPage === h.page && h.from !== h.page) softGo(h.from);
   } else {
     ruleHold = null;
-    closeSheet(); closeOverview();
+    closeSheet(); closeOverview(); closeCustomize(false);
     softGo(homeIndex());
   }
   if (req.kind !== 'home') lastAutoSwitch = Date.now();
@@ -1354,7 +1415,7 @@ function waitReason(req) {
   if (pagePaused) return t('panel.pagePausedWait');
   const grace = (dsp().touchGraceSec ?? 20) * 1000;
   if (Date.now() - lastUserTouch < grace) return 'waits until you are done';
-  if (sheet || !$('overview').hidden) return 'waits until you are done';
+  if (sheet || !$('overview').hidden || !$('custom').hidden) return 'waits until you are done';
   const dwell = (dsp().minDwellSec ?? 15) * 1000 - (Date.now() - lastAutoSwitch);
   if (dwell > 0) return `in ${Math.ceil(dwell / 1000)} s`;
   return '';
@@ -1437,22 +1498,43 @@ export function renderRulesBtn() {
 }
 
 export let titleTimer = 0;
+export const pad2 = (n) => String(n).padStart(2, '0');
+/** The page's number and name, for a moment, in the strip where the dots are (never over the widgets). */
 export function flashTitle() {
   const p = pages[curPage];
   if (!p || pages.length < 2) return;
-  const t = $('ptitle');
-  t.textContent = `${p.icon || ''} ${p.title}`.trim();
-  t.classList.add('on');
+  $('ptitle').replaceChildren(h('b', null, pad2(curPage + 1)), h('span', null, p.title));
+  document.body.classList.add('titling');
   clearTimeout(titleTimer);
-  titleTimer = setTimeout(() => t.classList.remove('on'), 900);
+  titleTimer = setTimeout(() => document.body.classList.remove('titling'), 1100);
+}
+
+// Swiping: the next page slides over the one before it, which stays a little behind, shrinks and dims (the left one
+// of the two in view is always the one underneath, in both directions). One element is written per frame, and only
+// while the pager rests between two pages.
+let pxFrame = 0;
+let depthGrid = null;
+function depth() {
+  pxFrame = 0;
+  const pos = pager.scrollLeft / window.innerWidth;
+  const i = Math.floor(pos), f = pos - i;
+  const g = live() && f > 0.002 && f < 0.998 ? pager.children[i]?.querySelector(':scope > .grid') : null;
+  if (depthGrid && depthGrid !== g) { depthGrid.style.transform = ''; depthGrid.style.opacity = ''; }
+  depthGrid = g;
+  if (!g) return;
+  g.style.transform = `translate3d(${(f * window.innerWidth * 0.66).toFixed(1)}px,0,0) scale(${(1 - f * 0.08).toFixed(4)})`;
+  g.style.opacity = (1 - f * 0.8).toFixed(3);
 }
 
 export function onScroll() {
+  if (!pxFrame) pxFrame = requestAnimationFrame(depth);
   const p = Math.round(pager.scrollLeft / window.innerWidth);
   if (p === curPage) return;
   const prev = curPage;
+  pager.children[curPage]?.classList.remove('cur');
   curPage = p;
   if (prev >= 0 && pagePaused) setPagePaused(false, { feedback: false, resume: false });
+  pager.children[curPage]?.classList.add('cur');
   updateDots();
   flashTitle();
   setActive();
@@ -1461,30 +1543,42 @@ export function onScroll() {
 }
 pager.addEventListener('scroll', onScroll, { passive: true });
 
+/** A page's layout in miniature: the overview tiles and the dot preview. */
+export function miniMap(p) {
+  return h('div', 'ov-map', (p.widgets || []).map((w) => {
+    const b = h('span', null, WIDGET_ICONS[w.type] || '');
+    b.style.gridArea = `${w.y + 1} / ${w.x + 1} / span ${w.h} / span ${w.w}`;
+    return b;
+  }));
+}
+
 export function openOverview() {
   haptic();
+  hidePeek();
   const ov = $('overview');
   const tile = (p, i) => {
-    const map = h('div', 'ov-map', p.widgets.map((w) => {
-      const b = h('span', null, WIDGET_ICONS[w.type] || '▫️');
-      b.style.gridArea = `${w.y + 1} / ${w.x + 1} / span ${w.h} / span ${w.w}`;
-      return b;
-    }));
-    const t = h('button', 'ov-tile' + (i === curPage ? ' on' : ''), map, h('div', 'ov-name', h('b', null, `${i + 1}`), ` ${p.icon || ''} ${p.title}`));
+    const t = h('button', 'ov-tile' + (i === curPage ? ' on' : ''), miniMap(p),
+      h('div', 'ov-name', h('b', null, pad2(i + 1)), h('span', 'ov-ico', p.icon || ''), h('span', 'ov-tt', p.title)));
     t.addEventListener('click', (e) => { e.stopPropagation(); haptic(); closeOverview(); goPage(i, true); });
     return t;
   };
   $('ovGrid').replaceChildren(...pages.map(tile));
+  $('ovCount').textContent = pad2(pages.length);
   renderRulesBtn();
   // several paired computers: switch between them here (a USB cable always wins)
   const pcs = pairedPcs();
   $('ovPcs').replaceChildren(...(pcs.length > 1 ? pcs.map((pc) => {
-    const b = h('button', 'ov-pc' + (pc.active ? ' on' : ''), '🖥️ ' + (pc.name || t('panel.computer')));
+    const b = h('button', 'ov-pc' + (pc.active ? ' on' : ''), pc.name || t('panel.computer'));
     b.addEventListener('click', (e) => { e.stopPropagation(); switchPc(pc); });
     return b;
   }) : []));
-  $('ovGrid').style.setProperty('--n', Math.min(4, Math.ceil(Math.sqrt(pages.length * 1.6))));
+  $('ovGrid').style.setProperty('--n', Math.min(5, Math.max(3, Math.ceil(Math.sqrt(pages.length * 1.7)))));
+  const was = ov.hidden;
   ov.hidden = false;
+  if (was) {
+    $('ovGrid').children[curPage]?.scrollIntoView({ block: 'center' });
+    rise(ov, { y: 8, scale: 0.99, duration: 0.3 });
+  }
 }
 window.openOverview = openOverview;
 
@@ -1501,16 +1595,48 @@ export function switchPc(pc) {
 export function closeOverview() { $('overview').hidden = true; }
 $('overview').addEventListener('click', closeOverview);
 $('ovRules').addEventListener('click', (e) => { e.stopPropagation(); toggleRulesPause(); });
+$('ovCustom').addEventListener('click', (e) => { e.stopPropagation(); haptic(); closeOverview(); openCustomize(); });
 
+// ---- the page dots. A tap opens the overview. Holding still pauses page switching. Sliding a finger along them (or
+// hovering with a mouse) shows each page before you go there, and lifting the finger goes to it.
+const dotsEl = $('dots'), peek = $('dotPeek');
+const dotEls = () => dotsEl.querySelectorAll(':scope > i'); // the pause button shares the bar
+let peekIdx = -1, peekTimer = 0, scrub = null, scrubbed = false;
 let dotsHoldTimer = 0, dotsHoldStart = null, heldDots = false;
 /** Cancels any pending long-press hold timer on the #dots bar. */
 function clearDotsHold() {
   if (dotsHoldTimer) { clearTimeout(dotsHoldTimer); dotsHoldTimer = 0; }
   dotsHoldStart = null;
 }
-$('dots').addEventListener('pointerdown', (e) => {
+function dotAt(x) {
+  let best = -1, dist = Infinity;
+  dotEls().forEach((d, i) => { const r = d.getBoundingClientRect(), dd = Math.abs(x - (r.left + r.width / 2)); if (dd < dist) { dist = dd; best = i; } });
+  return best;
+}
+function showPeek(i) {
+  clearTimeout(peekTimer);
+  const p = pages[i], dot = dotEls()[i];
+  if (!p || !dot) return;
+  if (i !== peekIdx) {
+    if (peekIdx >= 0 && scrub) haptic();
+    peekIdx = i;
+    peek.replaceChildren(miniMap(p), h('div', 'pk-name', h('b', null, pad2(i + 1)), h('span', null, p.title)));
+    peek.classList.toggle('cur', i === curPage);
+    dotEls().forEach((d, k) => d.classList.toggle('peek', k === i));
+  }
+  const r = dot.getBoundingClientRect(), w = peek.offsetWidth || 220;
+  peek.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
+  peek.classList.add('on');
+}
+export function hidePeek(delay = 0) {
+  clearTimeout(peekTimer);
+  const hide = () => { peek.classList.remove('on'); peekIdx = -1; dotEls().forEach((d) => d.classList.remove('peek')); };
+  if (delay) peekTimer = setTimeout(hide, delay); else hide();
+}
+dotsEl.addEventListener('pointerdown', (e) => {
   heldDots = false;
   clearDotsHold();
+  scrub = null;
   if (pages.length < 2 || dimmed || document.body.classList.contains('waking')) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   if (e.target.closest('.page-pause')) return;
@@ -1519,24 +1645,57 @@ $('dots').addEventListener('pointerdown', (e) => {
     dotsHoldTimer = 0;
     dotsHoldStart = null;
     heldDots = true;
+    scrub = null;
+    hidePeek();
     togglePagePaused();
   }, 450);
+  if (e.pointerType === 'mouse') return;
+  scrub = { start: e.clientX, on: false };
+  try { dotsEl.setPointerCapture(e.pointerId); } catch (_) {}
 });
-$('dots').addEventListener('pointermove', (e) => {
+dotsEl.addEventListener('pointermove', (e) => {
   if (dotsHoldStart && Math.hypot(e.clientX - dotsHoldStart[0], e.clientY - dotsHoldStart[1]) > 10) clearDotsHold();
-});
-['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => $('dots').addEventListener(ev, clearDotsHold));
-window.addEventListener('blur', clearDotsHold);
-$('dots').addEventListener('click', (e) => {
-  if (heldDots) {
-    heldDots = false;
-    if (!e.target.closest('.page-pause')) {
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
+  if (e.pointerType === 'mouse') {
+    if (pages.length < 2 || e.target.closest('.page-pause')) hidePeek(160);
+    else showPeek(dotAt(e.clientX));
+    return;
   }
-  if (e.target.closest('.page-pause')) return;
+  if (!scrub) return;
+  if (!scrub.on && Math.abs(e.clientX - scrub.start) > 8) { scrub.on = true; clearDotsHold(); }
+  if (scrub.on) showPeek(dotAt(e.clientX));
+});
+const endScrub = (go) => {
+  clearDotsHold();
+  if (!scrub) return;
+  if (scrub.on) {
+    scrubbed = true; // the click that follows the lift must not open the overview (and not every phone sends one)
+    setTimeout(() => { scrubbed = false; }, 450);
+    const i = peekIdx;
+    hidePeek();
+    if (go && i >= 0 && i !== curPage) { lastTouch = lastUserTouch = Date.now(); goPage(i, true); }
+  }
+  scrub = null;
+};
+dotsEl.addEventListener('pointerup', () => endScrub(true));
+dotsEl.addEventListener('pointercancel', () => endScrub(false));
+dotsEl.addEventListener('pointerleave', (e) => { clearDotsHold(); if (e.pointerType === 'mouse') hidePeek(220); });
+window.addEventListener('blur', clearDotsHold);
+peek.addEventListener('pointerenter', () => clearTimeout(peekTimer));
+peek.addEventListener('pointerleave', () => hidePeek(160));
+peek.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const i = peekIdx;
+  hidePeek();
+  if (i >= 0) { haptic(); lastTouch = lastUserTouch = Date.now(); goPage(i, true); }
+});
+dotsEl.addEventListener('click', (e) => {
+  if (e.target.closest('.page-pause')) return; // its own handler toggles the pause
+  if (heldDots || scrubbed) {
+    heldDots = scrubbed = false;
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   openOverview();
 });
 
@@ -1599,18 +1758,21 @@ window.onAndroidKey = (k) => {
   lastTouch = lastUserTouch = Date.now();
   if (nightOn) { wakeUntil = Date.now() + 30_000; setNight(false); return; }
   if (!$('overview').hidden) closeOverview();
+  if (!$('custom').hidden) closeCustomize(false);
   if (k === 'next') goPage(curPage + 1 >= pages.length ? 0 : curPage + 1, true);
   else if (k === 'prev') goPage(curPage - 1 < 0 ? pages.length - 1 : curPage - 1, true);
 };
 document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') window.onAndroidKey('next');
   else if (e.key === 'ArrowLeft') window.onAndroidKey('prev');
+  else if (e.key === 'Escape' && !$('custom').hidden) closeCustomize();
   else if (e.key === 'Escape' || e.key === 'o') ($('overview').hidden ? openOverview() : closeOverview());
 });
 window.onAndroidBack = () => {
   if (!$('approval').hidden) return; // answer it (or let it time out); Back must not dismiss a permission prompt
   if (closeSessionDetails()) return;
-  if (!$('overview').hidden) closeOverview();
+  if (!$('custom').hidden) closeCustomize();
+  else if (!$('overview').hidden) closeOverview();
   else if (sheet) closeSheet();
   else if (curPage !== homeIndex()) goPage(homeIndex(), true);
   else openOverview();
@@ -1747,7 +1909,7 @@ export function tick() {
   const dark = darkRoom && cfg.display?.nightWhenDark === true;
   setNight((isNight(now) || dark) && Date.now() > wakeUntil);
   if (!PREVIEW && idleDue() && !navQueue.some((r) => r.kind === 'home')) {
-    if (curPage === homeIndex()) { closeSheet(); closeOverview(); lastNav = Date.now(); } // only a sheet to close
+    if (curPage === homeIndex()) { closeSheet(); closeOverview(); closeCustomize(false); lastNav = Date.now(); } // only a sheet to close
     else { navQueue.push({ kind: 'home', at: Date.now(), priority: -1 }); pump(); }
   }
   applyBurnIn();
@@ -1766,7 +1928,7 @@ export function applyDisplay() {
   document.body.dataset.theme = ['amoled', 'midnight', 'warm', 'graphite'].includes(d.theme) ? d.theme : 'default';
   const accent = hexToRgb(d.accent);
   const before = DEFAULT_AMBIENT;
-  DEFAULT_AMBIENT = accent || '45, 212, 191';
+  DEFAULT_AMBIENT = accent || '255, 255, 255';
   document.documentElement.style.setProperty('--accent', `rgb(${DEFAULT_AMBIENT})`);
   artTint = d.artTint !== false;
   if (before !== DEFAULT_AMBIENT || !artTint) setAmbient(artTint ? currentArtColor : null);
@@ -1784,11 +1946,12 @@ export async function loadConfig() {
   if (PREVIEW) return;
   try {
     const r = await api('/config');
-    const before = JSON.stringify(cfg);
-    cfg = { ...DEFAULT_CFG, ...r.config };
+    const before = JSON.stringify(rawCfg);
+    rawCfg = { ...DEFAULT_CFG, ...r.config };
+    cfg = withPhone(rawCfg);
     cfgVersion = r.version;
-    if (JSON.stringify(cfg) !== before) {
-      store.set('cfg', cfg);
+    if (JSON.stringify(rawCfg) !== before) {
+      store.set('cfg', rawCfg);
       buildLayout();
       applyDisplay();
       loadWeather();
@@ -1922,8 +2085,11 @@ export async function poll() {
 }
 
 // ---------------------------------------------------------------- start
+phoneLook();
 buildLayout();
+requestAnimationFrame(() => enterPage(pager.children[curPage]));
 applyDisplay();
+initCustomize();
 tick();
 loadWeather();
 setInterval(loadWeather, 15 * 60_000);
@@ -1948,7 +2114,7 @@ if (PREVIEW) {
     if (e.origin !== location.origin || e.data?.type !== 'phonebox-preview') return;
     const c = e.data.config || {};
     // no night screen and no idle return in the preview
-    cfg = { ...DEFAULT_CFG, ...c, night: { ...(c.night || {}), enabled: false }, display: { ...(c.display || {}), idleReturnSec: 0 } };
+    cfg = rawCfg = { ...DEFAULT_CFG, ...c, night: { ...(c.night || {}), enabled: false }, display: { ...(c.display || {}), idleReturnSec: 0 } };
     buildLayout();
     applyDisplay();
     const wk = JSON.stringify(cfg.weather);

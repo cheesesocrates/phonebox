@@ -1,5 +1,8 @@
-import { $, API, D, LEVEL_COLOR, LOCALE, mediaHtml, METRICS, Q_STYLE, S_ORDER, ago, api, averageColor, buzz, cfg, chart, color, cssVar, currentProcessesSort, emit, fillIcon, fmtClock, fmtDur, fmtHM, fmtMem, fmtReset, fmtTime, fmtValue, gotoProcesses, gpuMem, gpusOf, h, haptic, hasProcessesPage, hist, hour12, keyButton, levelOf, media, metricText, online, openSheet, paceInfo, pad, prRow, pushView, quotaProviders, r1, registerProcessesSorter, renderStatus, ringSvg, setArtColor, setMediaState, setVolDragging, shortDur, shortGpu, store, t, tick, toast, volDragging, wxBlock, wxIcon } from '../main.js';
+
+import { $, API, D, LEVEL_COLOR, LOCALE, mediaHtml, METRICS, Q_STYLE, S_ORDER, ago, api, averageColor, buzz, cfg, chart, color, cssVar, currentProcessesSort, emit, fillIcon, fmtClock, fmtDur, fmtHM, fmtMem, fmtReset, fmtTime, fmtValue, gotoProcesses, gpuMem, gpusOf, h, haptic, hasProcessesPage, hist, hour12, keyButton, levelOf, media, metricText, online, openSheet, paceInfo, pad, prRow, pushView, quotaProviders, r1, registerProcessesSorter, renderStatus, shortCpu, ringInto, ringSvg, setArtColor, setMediaState, setVolDragging, shortDur, shortGpu, store, t, tick, toast, volDragging, wxBlock, wxIcon, wxLines } from '../main.js';
 import { W } from '../registry.js';
+import { press, reveal, roll, sleeve, swap } from '../motion.js';
+import { asciiField, history, wave, weather } from '../ascii.js';
 import { invalidateDeckState } from './controls.js';
 
 function bindProcessLink(box, sortTarget) {
@@ -45,12 +48,16 @@ W.clock = {
   },
 };
 
+// Open-Meteo weather codes to the ASCII sky behind the weather widget
+const skyKind = (code, day) => code == null ? 'cloud' : code <= 1 ? (day === 0 ? 'night' : 'clear') : code <= 3 ? 'cloud' : code <= 48 ? 'fog'
+  : code <= 57 ? 'drizzle' : code <= 67 ? 'rain' : code <= 77 ? 'snow' : code <= 82 ? 'rain' : code <= 86 ? 'snow' : 'storm';
 W.weather = {
   needs: ['weather'],
   create(box) {
     const wx = wxBlock();
     box.append(wx);
-    return { update: () => wx.update() };
+    const sky = asciiField(box, weather);
+    return { update: () => { wx.update(); const l = wxLines(); sky.set({ kind: skyKind(l?.code, l?.day) }); } };
   },
 };
 
@@ -110,16 +117,31 @@ W.media = {
       'YouTube Music': '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#ff0033"/><circle cx="12" cy="12" r="6.5" fill="none" stroke="#fff" stroke-width="1.4"/><path d="m10 8.5 5.5 3.5-5.5 3.5z" fill="#fff"/></svg>',
       'Internet Radio': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 6.8 18.5 2a1 1 0 0 1 .7 1.9L10.8 7H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2.2zm1.8 5.2a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm6 1.5v1.8h4v-1.8h-4zm0 3.2v1.8h4v-1.8h-4z" fill="#38bdf8"/></svg>',
     };
-    let artId = -1, volTimer = 0, volumeRelease = 0;
-    img.addEventListener('load', () => { img.classList.add('on'); setArtColor(averageColor(img)); });
-    img.addEventListener('error', () => img.classList.remove('on'));
+    const bg = q('.m-bg'), bgImg = q('.m-bg img'), disc = q('.vinyl');
+    const scope = asciiField(box, wave, { cls: 'ascii-wave' });
+    let artId = -1, volTimer = 0, volumeRelease = 0, spinning = null;
+    const noArt = () => { img.classList.remove('on'); box.classList.remove('has-art'); bgImg.removeAttribute('src'); setArtColor(null); };
+    img.addEventListener('load', () => {
+      img.classList.add('on');
+      setArtColor(averageColor(img));
+      bgImg.src = img.src;
+      box.classList.add('has-art');
+      reveal(img, bg);
+    });
+    img.addEventListener('error', noArt);
+    // the record comes out of its sleeve while music plays
+    const setPlaying = (on) => {
+      box.classList.toggle('playing', on);
+      if (spinning !== on) { spinning = on; sleeve(disc, on); scope.set({ playing: on }); }
+    };
     box.querySelectorAll('[data-media]').forEach((btn) => btn.addEventListener('click', async () => {
       haptic();
+      press(btn);
       const action = btn.dataset.media;
       if (action === 'playpause' && media) {
         media.playing = !media.playing; // optimistic update
         media.at = performance.now();
-        box.classList.toggle('playing', media.playing);
+        setPlaying(media.playing);
       }
       try {
         const res = await api('/media/' + action, 'POST');
@@ -185,21 +207,19 @@ W.media = {
         } else q('.vol-val').textContent = 'n/a';
         box.classList.toggle('idle', !m);
         if (!m) {
-          box.classList.remove('playing');
+          setPlaying(false);
           q('.m-app-name').textContent = 'Media';
           sourceIcon.replaceChildren();
-          q('.m-title').textContent = t('w.nothingPlaying');
-          q('.m-artist').textContent = t('w.pressToResume');
+          swap([q('.m-title'), q('.m-artist')], [t('w.nothingPlaying'), t('w.pressToResume')]);
           q('.fill').style.width = '0';
           q('.m-pos').textContent = q('.m-dur').textContent = '0:00';
-          if (artId !== 0) { artId = 0; img.classList.remove('on'); setArtColor(null); }
+          if (artId !== 0) { artId = 0; noArt(); }
           return;
         }
-        box.classList.toggle('playing', m.playing);
+        setPlaying(!!m.playing);
         q('.m-app-name').textContent = m.app || 'Media';
         sourceIcon.innerHTML = sourceIcons[m.app] || '';
-        q('.m-title').textContent = m.title || 'Unknown track';
-        q('.m-artist').textContent = [m.artist, m.album].filter(Boolean).join(' · ') || '—';
+        swap([q('.m-title'), q('.m-artist')], [m.title || 'Unknown track', [m.artist, m.album].filter(Boolean).join(' · ') || '—']);
         if (m.app === 'Internet Radio' && !(m.durMs > 0)) {
           q('.fill').style.width = m.playing ? '100%' : '0';
           q('.m-pos').textContent = fmtTime(m.posMs || 0);
@@ -210,7 +230,7 @@ W.media = {
         if (m.artId !== artId) {
           artId = m.artId;
           if (m.artId) img.src = `${API}/art?id=${m.artId}`;
-          else { img.classList.remove('on'); setArtColor(null); }
+          else noArt();
         }
       },
       destroy: cancelVolumeDrag,
@@ -228,18 +248,21 @@ W.stat = {
     const lbl = h('div', 't-label', m.label);
     const val = h('b', null, '—'), unit = h('small'), sub = h('div', 't-sub', ' ');
     box.append(canvas, lbl, h('div', 't-val', val, unit), sub);
+    const art = asciiField(box, history, { animated: false });
     if (o.metric === 'cpu' || o.metric === 'ram') bindProcessLink(box, o.metric === 'cpu' ? 'cpu' : 'mem');
     return {
       update() {
         const s = D.state;
         if (!s) return;
         const [v, u] = metricText(m, s);
-        val.textContent = v;
+        roll(val, v);
         unit.textContent = u;
         const pctVal = m.pct?.(s);
         lbl.textContent = pctVal != null && m.label === 'RAM' ? `RAM (${Math.round(pctVal)}%)` : m.label;
         sub.textContent = m.sub?.(s) || ' ';
-        chart(canvas, [{ data: hist[m.hist || o.metric] || hist.cpu, color: c, max: m.max(s) }]);
+        const data = hist[m.hist || o.metric] || hist.cpu, max = m.max(s) || 1;
+        chart(canvas, [{ data, color: c, max }]);
+        art.set({ series: data.map((x) => (x || 0) / max) });
       },
     };
   },
@@ -254,7 +277,8 @@ W.gauge = {
     box.append(dial, h('div', 'g-label', m.label), sub);
     dial.append(pct);
     if (o.metric === 'cpu' || o.metric === 'ram') bindProcessLink(box, o.metric === 'cpu' ? 'cpu' : 'mem');
-    let svg = null;
+    const num = h('span', null, '—'), unit = h('small');
+    pct.append(num, unit);
     return {
       update() {
         const s = D.state;
@@ -263,11 +287,10 @@ W.gauge = {
         const p = raw == null ? 0 : (raw / (m.pct ? 100 : m.max(s))) * 100;
         const warn = m.hot ? (raw > m.hot[1] ? '#ef4444' : raw > m.hot[0] ? '#f59e0b' : '') : (p >= 95 ? '#ef4444' : p >= 85 ? '#f59e0b' : '');
         dial.style.setProperty('--qc', warn || 'var(--q)');
-        if (svg) svg.remove();
-        dial.insertAdjacentHTML('afterbegin', ringSvg(p));
-        svg = dial.firstElementChild;
+        ringInto(dial, p);
         const [v, u] = metricText(m, s);
-        pct.replaceChildren(v, h('small', null, u));
+        roll(num, v);
+        unit.textContent = u;
         sub.textContent = m.sub?.(s) || '';
       },
     };
@@ -296,7 +319,7 @@ W.chart = {
         if (single) {
           const [v, u] = metricText(single, s);
           main.replaceChildren(h('b', null, v), h('small', null, u), h('span', 'chips', single.sub?.(s) ? h('span', 'chip', single.sub(s)) : ''));
-          head.lastChild.textContent = single.title?.(s) || '';
+          { const name = single.title?.(s) || ''; head.lastChild.textContent = name ? shortCpu(name).replace(/\s+Processor$/i, '') : ''; }
         } else {
           main.replaceChildren(...keys.map((k) => {
             const mm = METRICS[k];
@@ -498,10 +521,9 @@ W.quotas = {
         if (p.id === 'codex' && p.codex) {
           const c = p.codex;
           const details = h('div', 'q-details');
-          if (c.model) details.append(h('div', 'q-detail', h('span', null, 'Latest local session'), h('strong', null, c.model + (c.effort ? ` · ${c.effort}` : ''))));
-          if (c.totalTokens != null) details.append(h('div', 'q-detail', h('span', null, 'Session tokens'), h('strong', null, tokens(c.totalTokens))));
-          if (c.totalInput != null || c.totalOutput != null) details.append(h('div', 'q-detail q-breakdown', `In ${tokens(c.totalInput)} · Out ${tokens(c.totalOutput)} · Cached ${tokens(c.totalCached)} · Reasoning ${tokens(c.totalReasoning)}`));
-          if (c.lastInput != null && c.contextWindow) details.append(h('div', 'q-detail q-breakdown', `Last input ${tokens(c.lastInput)} / ${tokens(c.contextWindow)} context window`));
+          // the session in one line: model and effort on the left, tokens on the right (the breakdown is in the sheet)
+          if (c.model || c.totalTokens != null) details.append(h('div', 'q-detail', h('span', null, (c.model || '') + (c.effort ? ` · ${c.effort}` : '')),
+            h('strong', null, c.totalTokens != null ? tokens(c.totalTokens) : '')));
           if (details.childNodes.length) card.append(details);
         }
         card.append(h('div', 'q-foot', h('span', p.extra?.startsWith('Limit reached') ? 'q-alert' : null, p.extra || ''), p.error ? h('span', 'q-err', p.error) : h('span')));
@@ -711,7 +733,7 @@ W.processes = {
       const loadPart = sort === 'cpu'
         ? (cpuPct != null ? `Total CPU ${cpuPct}% · ` : '')
         : ramStr;
-      sum.textContent = box.clientWidth > 380 ? loadPart + t('w.procsSummary', { n: data.total, apps: data.groupCount ?? data.groups.length }) : loadPart + t('w.procsSummaryShort', { n: data.total });
+      sum.textContent = loadPart + t('w.procsSummaryShort', { n: data.total });
       if (grid.querySelector('.empty')) grid.replaceChildren();
       const keep = new Set(list.map((g) => g.name));
       for (const [n, e] of els) if (!keep.has(n)) { e.remove(); els.delete(n); }
@@ -913,7 +935,6 @@ W.pomodoro = {
     const play = h('button', 'pb main', '▶'), reset = h('button', 'pb', '↺'), skip = h('button', 'pb', '⏭');
     dial.append(time);
     box.append(dial, phase, count, h('div', 'pomo-btns', reset, play, skip));
-    let svg = null;
     const total = () => plan[st.step].ms;
     const remaining = () => (st.endsAt ? Math.max(0, st.endsAt - Date.now()) : st.left);
     /** Moves to the next step; returns true when the last round of the sequence is over (the timer then stops). */
@@ -953,9 +974,7 @@ W.pomodoro = {
       box.classList.toggle('brk', kind !== 'focus');
       box.classList.toggle('long', kind === 'long');
       box.classList.toggle('run', !!st.endsAt);
-      if (svg) svg.remove();
-      dial.insertAdjacentHTML('afterbegin', ringSvg(100 * (1 - left / total())));
-      svg = dial.firstElementChild;
+      ringInto(dial, 100 * (1 - left / total()));
       time.textContent = fmtTime(left + 999);
       phase.textContent = label();
       const tomatoes = st.count ? '🍅'.repeat(Math.min(st.count, 6)) + (st.count > 6 ? ` ×${st.count}` : '') : t('w.noSessionsToday');

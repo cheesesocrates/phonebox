@@ -1,6 +1,7 @@
 import { $, D, DEFAULT_CFG, LOCALE, cfg, fmtDur, fmtHM, h, t, tick } from '../main.js';
 import { W } from '../registry.js';
 import { cached, every } from './helpers.js';
+import { asciiField, dust, stars } from '../ascii.js';
 
 // ---------------------------------------------------------------- sky & air
 export function moonPhase(date) {
@@ -55,6 +56,7 @@ W.air = {
     const city = h('span', 'w-sub');
     const v = h('div', 'aq-v', '—'), cat = h('div', 'aq-c', t('w.loading')), chips = h('div', 'aq-chips');
     box.append(h('div', 'w-title', 'Air quality', city), h('div', 'aq-main', v, cat), chips);
+    const art = asciiField(box, dust); // dust in the air: more of it the worse the air is
     let coordinates, load;
     const clearIndex = (message) => {
       box.style.removeProperty('--c');
@@ -74,7 +76,8 @@ W.air = {
           if (band) {
             box.style.setProperty('--c', band[2]);
             v.textContent = Math.round(aqi);
-            cat.textContent = band[1] + ' · ' + t('w.euroAqi');
+            cat.textContent = band[1];
+            art.set({ amount: Math.min(1, aqi / 100) });
           } else clearIndex(t('w.unavailable'));
           chips.replaceChildren(...[['PM2.5', c.pm2_5], ['PM10', c.pm10], ['O₃', c.ozone], ['NO₂', c.nitrogen_dioxide]]
             .filter((x) => x[1] != null).map(([n, x]) => h('span', 'chip', `${n} ${Math.round(x)}`)));
@@ -108,6 +111,7 @@ W.moon = {
   create(box) {
     box.innerHTML = '<div class="w-title">Moon</div><div class="mo-body"><svg viewBox="0 0 100 100" class="mo-disc"><circle class="mo-dark" cx="50" cy="50" r="44"/><path class="mo-lit"/></svg>' +
       '<div class="mo-text"><b class="mo-name"></b><span class="mo-ill"></span><small class="mo-next"></small></div></div>';
+    asciiField(box, stars);
     const q = (s) => box.querySelector(s);
     let shown = -1;
     return {

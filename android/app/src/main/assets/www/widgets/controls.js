@@ -134,9 +134,10 @@ function chooser(box, options, which) {
 }
 
 function hold(box, options, power = null) {
-  const b = h('button', 'deck-hold', power ? `Hold: ${power}` : 'Hold to talk'); b.type = 'button';
+  const b = h('button', 'deck-hold', power ? power : 'Hold to talk'); b.type = 'button';
+  if (power) b.setAttribute('aria-label', `Hold: ${power}`);
   b.disabled = true;
-  const status = h('div', 'deck-caption', power ? 'Hold for 2 seconds' : 'Release to restore the microphone'); box.append(b, status);
+  const status = h('div', 'deck-caption', power ? 'Hold 2 s' : 'Release to restore the microphone'); box.append(b, status);
   let held = false, lease = null, timer = 0, renewal = 0, device = null;
   const end = async () => {
     held = false; clearTimeout(timer); clearInterval(renewal); b.classList.remove('held');
@@ -186,14 +187,20 @@ function mediaView(box, options, mode) {
     shuffle = button('Shuffle', () => call('shuffle', current.shuffle ? 0 : 1));
     repeat = button('Repeat', () => call('repeat', current.repeat === 'None' ? 1 : current.repeat === 'Track' ? 2 : 0));
     controls.append(shuffle, repeat);
-  } else controls.append(button('⏮', () => call('prev'), 'Previous track'), button('⏯', () => call('playpause'), 'Play or pause'), button('⏭', () => call('next'), 'Next track'));
+  } else {
+    // fixed icon markup only: nothing from the agent goes into innerHTML
+    const icon = (path, op, name) => { const b = button('', () => call(op), name); b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${path}"/></svg>`; return b; };
+    controls.classList.add('deck-transport');
+    controls.append(icon('M6 5h2v14H6zM20 5v14L9.5 12z', 'prev', 'Previous track'), icon('M4 5v14l9-7zM15 5h2.5v14H15zM19.5 5H22v14h-2.5z', 'playpause', 'Play or pause'),
+      icon('M16 5h2v14h-2zM4 5v14l10.5-7z', 'next', 'Next track'));
+  }
   return data => {
     current = selectedPlayer(data, options);
     title.textContent = current?.title || t('w.noMediaSelected'); source.textContent = current?.name || 'Choose a source in Media sources';
     controls.querySelectorAll('button').forEach(b => b.disabled = !current);
-    if (seek) { seek.input.max = Math.max(1, current?.duration || 1); seek.set(current?.position || 0); seek.number.textContent = `${Math.floor((current?.position || 0) / 1000)} / ${Math.floor((current?.duration || 0) / 1000)} s`; seek.input.disabled = !current?.canSeek; }
+    if (seek) { seek.input.max = Math.max(1, current?.duration || 1); seek.set(current?.position || 0); seek.number.textContent = `${timeText(current?.position)} / ${timeText(current?.duration)}`; seek.input.disabled = !current?.canSeek; }
     if (shuffle) { shuffle.disabled = !current?.canShuffle; shuffle.setAttribute('aria-pressed', String(!!current?.shuffle)); }
-    if (repeat) { repeat.disabled = !current?.canRepeat; repeat.textContent = 'Repeat: ' + (current?.repeat || 'None'); }
+    if (repeat) { const r = current?.repeat || 'None'; repeat.disabled = !current?.canRepeat; repeat.textContent = r === 'None' ? 'Repeat' : `Repeat · ${r.toLowerCase()}`; repeat.setAttribute('aria-pressed', String(r !== 'None')); }
   };
 }
 
@@ -215,7 +222,7 @@ function actionsView(box, options, type) {
     if(type === 'focus-profile' || type === 'meeting-profile') items.push(...(data.profiles || []));
     if (options.ids?.length) items = items.filter(item => options.ids.includes(item.id));
     const key = JSON.stringify(items); if (key === signature) return; signature = key;
-    if (!items.length) { empty(grid, 'Assign controls in the computer’s Control Deck settings'); return; }
+    if (!items.length) { empty(grid, 'Nothing assigned yet'); return; }
     grid.replaceChildren(...items.map(item => {
       const label = h('span', '', item.name), state = h('small', '', item.state || 'Ready');
       const b = button('', async () => { await deckCommand(item.kind === 'profile' ? 'profile' : 'action', { id: item.id, op: item.kind === 'radio' ? 'toggle' : (type === 'app-dock' ? 'focus' : '') }); signature = ''; });
@@ -562,13 +569,14 @@ export function registerDeckWidget(type, title, mode = type) {
       else if (mode === 'ptt') component = hold(box, o);
       else if (mode === 'listen') component = listening(box);
       else if (['remote', 'seek', 'modes'].includes(mode)) render = mediaView(box, o, mode);
-      else if (mode === 'panic') box.append(button('Mute audio + microphones', () => deckCommand('panic')));
+      else if (mode === 'panic') { const b = button('Mute everything', () => deckCommand('panic'), 'Mute audio + microphones'); b.classList.add('deck-panic'); box.append(b); }
       else if (mode === 'desktops') box.append(button('← Desktop', () => deckCommand('desktop', { value: -1 })), button('Desktop →', () => deckCommand('desktop', { value: 1 })));
       else if (mode === 'system') box.append(button('Lock', () => deckCommand('lock')), button('Display off', () => deckCommand('monitor-off')));
       else if (mode === 'power') {
-        const group = h('div', 'deck-power-grid'); box.append(group);
+        const group = h('div', 'deck-power-grid'), note = h('div', 'deck-caption deck-note', 'Enable power controls in desktop settings'); box.append(group, note);
         const components = ['sleep', 'restart', 'shutdown'].map(action => { const item = h('div', 'deck-power-item'); group.append(item); return hold(item, o, action); });
-        component = { render(data) { components.forEach(c => c.render(data)); }, destroy() { components.forEach(c => c.destroy()); } };
+        component = { render(data) { components.forEach(c => c.render(data)); group.classList.toggle('locked', !data.allowPower); note.hidden = !!data.allowPower; },
+          destroy() { components.forEach(c => c.destroy()); } };
       } else if (mode === 'duck') {
         let enabled = false; const b = button('Enable ducking', () => deckCommand('duck', { op: enabled ? 'off' : 'on', value: o.level ?? 25 })); box.append(b);
         render = data => { enabled = data.ducking; b.textContent = enabled ? t('w.disableDucking') : t('w.enableDucking'); b.setAttribute('aria-pressed', String(enabled)); };
@@ -676,7 +684,8 @@ integrationWidget('obs-replay', 'OBS replay buffer', 'obs', (root,data,send)=>{
 });
 integrationWidget('obs-transition', 'OBS transition', 'obs', (root,data,send)=>{
   for(const t of data.transitions || []) {const b=button(t.transitionName,()=>send('transition',{id:t.transitionName}));b.classList.toggle('selected',data.transition===t.transitionName);root.append(b);}
-  const s=slider('Transition duration',value=>send('duration',{value}),10000);s.input.min=50;s.input.step=50;s.set(data.duration || 300);s.input.disabled=data.duration==null;root.append(s.input,s.number);
+  const s=slider('Transition duration',value=>send('duration',{value}),10000);s.input.min=50;s.input.step=50;s.set(data.duration || 300);s.input.disabled=data.duration==null;
+  root.append(h('div','deck-channel',h('div','deck-channel-name','Duration'),s.input,h('div','deck-channel-foot',h('span',null,s.number,h('small','deck-unit',' ms')))));
 });
 integrationWidget('obs-camera', 'OBS virtual camera', 'obs', (root,data,send)=>{
   const b=button(data.cameraActive?'Stop virtual camera':'Start virtual camera',()=>send('camera'));b.disabled=!data.cameraAvailable;root.append(b);

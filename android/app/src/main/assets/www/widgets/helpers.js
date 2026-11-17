@@ -1,4 +1,4 @@
-import { $, LOCALE, cfg, h, ringSvg, safeFetch, sizeCanvas, store } from '../main.js';
+import { $, LOCALE, cfg, h, ringInto, safeFetch, sizeCanvas, store } from '../main.js';
 
 // ---------------------------------------------------------------- more widgets: helpers
 export const inflight = {};
@@ -46,11 +46,8 @@ export const lines = (v, d) => (Array.isArray(v) ? v : typeof v === 'string' ? v
 export function dialEl() {
   const dial = h('div', 'g-dial'), val = h('div', 'g-val');
   dial.append(val);
-  let svg = null;
   dial.set = (pct, text, unit, elapsed) => {
-    if (svg) svg.remove();
-    dial.insertAdjacentHTML('afterbegin', ringSvg(pct, elapsed)); // numbers only
-    svg = dial.firstElementChild;
+    ringInto(dial, pct, elapsed); // numbers only
     val.replaceChildren(String(text), unit ? h('small', null, unit) : '');
   };
   return dial;

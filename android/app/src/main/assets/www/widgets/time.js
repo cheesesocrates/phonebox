@@ -1,6 +1,7 @@
 import { $, LOCALE, buzz, fmtTime, h, haptic, pad, r1, store, t, tick, toast } from '../main.js';
 import { W } from '../registry.js';
 import { dialEl, lines } from './helpers.js';
+import { asciiField, plasma, ripple, stars } from '../ascii.js';
 
 // ---------------------------------------------------------------- clocks & time
 W.analog = {
@@ -109,8 +110,9 @@ W.timer = {
         toast('Time is up', 'ok', '⏳ ' + (o.label || 'Timer'), 6);
       }
       const left = remaining();
-      dial.set(st.total ? 100 * (left / st.total) : 0, st.total ? fmtTime(left + 999) : '—');
+      if (st.total) dial.set(100 * (left / st.total), fmtTime(left + 999));
       box.classList.toggle('run', !!st.endsAt);
+      box.classList.toggle('idle', !st.total);
     };
     renderBtns();
     return { update: render };
@@ -123,7 +125,8 @@ W.counter = {
     const key = `ct:${page.id}/${w.id}`;
     let st = store.get(key, null) || { n: 0, day: new Date().toDateString() };
     const step = Number(o.step) || 1;
-    const num = h('div', 'ct-n'), minus = h('button', 'pb', '−'), plus = h('button', 'pb main', '+'), reset = h('button', 'mini-btn', 'Reset');
+    const num = h('div', 'ct-n'), minus = h('button', 'pb', '−'), plus = h('button', 'pb main', '+'), reset = h('button', 'mini-btn icon', '↺');
+    reset.setAttribute('aria-label', 'Reset');
     box.style.setProperty('--q', o.color || '#a78bfa');
     box.append(h('div', 'w-title', o.label || 'Counter', reset), num, h('div', 'pomo-btns', minus, plus));
     // "Start from zero every day" also when the panel stays open over midnight (it is never rebuilt then)
@@ -146,6 +149,7 @@ W.breathe = {
     const cycle = phases.reduce((a, p) => a + p[1], 0);
     const ball = h('div', 'br-ball'), word = h('div', 'br-w', t('w.tapToStart')), count = h('div', 'br-c');
     box.append(h('div', 'br-stage', ball, h('div', 'br-txt', word, count)));
+    asciiField(box, ripple);
     let start = null, lastPhase = -1;
     box.addEventListener('click', () => { haptic(); start = start ? null : Date.now(); lastPhase = -1; if (!start) { ball.style.transition = 'transform 1s ease'; ball.style.transform = 'scale(.45)'; word.textContent = t('w.tapToStart'); count.textContent = ''; } });
     ball.style.transform = 'scale(.45)';
@@ -201,6 +205,7 @@ W.quote = {
     const mins = Math.max(1, Number(o.minutes) || 30);
     const q = h('div', 'qt-q'), a = h('div', 'qt-a');
     box.append(h('div', 'qt-mark', '“'), q, a);
+    asciiField(box, plasma);
     let offset = 0, shown = -1;
     const pick = () => {
       const idx = (Math.floor(Date.now() / (mins * 60000)) + offset) % list.length;
@@ -270,6 +275,7 @@ W.wordclock = {
   create(box) {
     const lead = h('div', 'wc-lead'), main = h('div', 'wc-main'), date = h('div', 'wc-date');
     box.append(lead, main, date);
+    asciiField(box, stars);
     let shown = '';
     return {
       update() {

@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>PhoneBox</title>
+<link rel="preload" href="vendor/plex-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="vendor/plex-mono-latin-500.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="controls.css">
 <link rel="stylesheet" href="appearance.css">
@@ -13,12 +15,28 @@
 <div id="pager"></div>
 
 <nav id="dots" data-i18n-title="panel.allPages" title="All pages"></nav>
-<div id="ptitle"></div>
+<div id="ptitle" aria-hidden="true"></div>
 <div id="pagePauseOverlay" aria-hidden="true"></div>
+<!-- hover a dot, or slide a finger along them: the page before you go there -->
+<div id="dotPeek" aria-hidden="true"></div>
 
 <div id="overview" hidden>
-  <div class="ov-head"><span data-i18n="panel.allPages">All pages</span> <small data-i18n="panel.overviewHint">tap one to jump · volume keys flip pages · long-press a page to come back here</small><span id="ovPcs"></span><button class="ov-pc" id="ovRules" hidden></button></div>
+  <div class="ov-head">
+    <span class="ov-t" data-i18n="panel.allPages">All pages</span><span class="ov-n" id="ovCount"></span>
+    <span class="ov-sp"></span><span id="ovPcs"></span>
+    <button class="ov-btn" id="ovRules" hidden></button>
+    <button class="ov-btn primary" id="ovCustom" data-i18n="cz.title">Customize</button>
+  </div>
   <div id="ovGrid"></div>
+</div>
+
+<div id="custom" hidden role="dialog" data-i18n-aria="cz.title" aria-label="Customize">
+  <div class="cz-head">
+    <b data-i18n="cz.title">Customize</b><small data-i18n="cz.hint">On this phone only</small><span class="ov-sp"></span>
+    <button class="ov-btn" id="czReset" type="button" data-i18n="cz.reset">Reset</button>
+    <button class="ov-btn primary" id="czDone" type="button" data-i18n="cz.done">Done</button>
+  </div>
+  <div id="czBody"></div>
 </div>
 
 <div class="p-sheet" id="pSheet" hidden>
@@ -59,10 +77,10 @@
 <div id="offline"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 16.5a5 5 0 0 1 7 0M2 8.82a15 15 0 0 1 4.17-2.65M10.66 5c4.01-.36 8.14.9 11.34 3.76M16.85 11.25a10 10 0 0 1 2.22 1.68M5 13a10 10 0 0 1 5.24-2.76M12 20h.01M2 2l20 20"/></svg><span data-i18n="panel.pcNotConnected">PC not connected</span></div>
 <div id="night"><div id="nClock">--:--</div><div id="nDate"></div></div>
 
-<div id="webviewWarn" hidden role="status" style="position:fixed;top:8px;left:8px;right:8px;z-index:90;align-items:center;gap:10px;padding:8px 12px;border-radius:10px;background:rgba(24,20,12,.94);border:1px solid rgba(245,158,11,.45);color:#fde68a;font:12.5px/1.35 system-ui,sans-serif">
+<div id="webviewWarn" hidden role="status" style="position:fixed;top:8px;left:8px;right:8px;z-index:90;align-items:center;gap:10px;padding:8px 12px;border-radius:3px;background:rgba(0,0,0,.94);border:1px solid rgba(245,158,11,.45);color:#fde68a;font:12.5px/1.35 system-ui,sans-serif">
   <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg>
   <span style="flex:1" data-i18n="panel.webviewWarn">Outdated WebView — update Android System WebView or Google Chrome so widgets scale properly.</span>
-  <button id="webviewWarnClose" type="button" data-i18n-aria="panel.dismissWebview" aria-label="Dismiss WebView notice" style="background:transparent;border:1px solid rgba(253,230,138,.35);color:inherit;border-radius:6px;padding:3px 8px;font:inherit;cursor:pointer;display:flex"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+  <button id="webviewWarnClose" type="button" data-i18n-aria="panel.dismissWebview" aria-label="Dismiss WebView notice" style="background:transparent;border:1px solid rgba(253,230,138,.35);color:inherit;border-radius:2px;padding:3px 8px;font:inherit;cursor:pointer;display:flex"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
 </div>
 <script>
 (function () {
@@ -81,7 +99,7 @@
   } catch (_) {}
 })();
 </script>
-<div id="jsfail" hidden role="alert" style="position:fixed;left:8px;right:8px;bottom:8px;z-index:200;padding:10px 12px;border-radius:10px;background:rgba(60,10,10,.96);border:1px solid rgba(248,113,113,.6);color:#fecaca;font:12px/1.4 monospace;white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow:auto"></div>
+<div id="jsfail" hidden role="alert" style="position:fixed;left:8px;right:8px;bottom:8px;z-index:200;padding:10px 12px;border-radius:3px;background:rgba(20,0,0,.96);border:1px solid rgba(248,113,113,.6);color:#fecaca;font:12px/1.4 monospace;white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow:auto"></div>
 <script>
 // Anything that throws while the panel boots leaves a black screen with no clue. Show it instead.
 (function () {
@@ -136,6 +154,8 @@
 </script>
 <script src="compat.js"></script>
 <script src="i18n.js"></script>
+<!-- GSAP for the motion in motion.js; the panel works the same without it, only without animation -->
+<script src="vendor/gsap.min.js"></script>
 <script type="module" src="main.js"></script>
 </body>
 </html>
