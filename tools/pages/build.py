@@ -51,6 +51,7 @@ def build(out):
     (out / 'panel').mkdir(parents=True)
     (out / 'settings').mkdir()
     shutil.copy(PAGES / 'demo.js', out / 'demo.js')
+    shutil.copytree(PAGES / 'vendor', out / 'vendor')  # the landing page's ScrollTrigger, SplitText and Lenis
     (out / 'index.html').write_text(landing_html(), encoding='utf-8')
     for name in ('widgets.json', 'templates.json'): shutil.copy(AGENT / name, out / name)
     shutil.copy(AGENT / 'phonebox.ico', out / 'favicon.ico')
